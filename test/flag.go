@@ -19,7 +19,9 @@ package test
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -29,18 +31,22 @@ var Flags = initializeFlags()
 
 // EnvironmentFlags define the flags that are needed to run the e2e tests.
 type EnvironmentFlags struct {
-	Cluster     string // K8s cluster (defaults to cluster in kubeconfig)
-	LogVerbose  bool   // Enable verbose logging
-	DockerRepo  string // Docker repo (defaults to $KO_DOCKER_REPO)
-	EmitMetrics bool   // Emit metrics
-	Tag         string // Docker image tag
-	Languages   string // Whitelisted languages to run
+	Cluster       string // K8s cluster (defaults to cluster in kubeconfig)
+	ClusterRegion string // GCP cluster region used for deployment
+	LogVerbose    bool   // Enable verbose logging
+	DockerRepo    string // Docker repo (defaults to $KO_DOCKER_REPO)
+	EmitMetrics   bool   // Emit metrics
+	Tag           string // Docker image tag
+	Languages     string // Whitelisted languages to run
 }
 
 func initializeFlags() *EnvironmentFlags {
 	var f EnvironmentFlags
 	flag.StringVar(&f.Cluster, "cluster", "",
 		"Provide the cluster to test against. Defaults to the current cluster in kubeconfig.")
+
+	flag.StringVar(&f.ClusterRegion, "clusterregion", "",
+		"Provide the cluster region to test against.")
 
 	flag.BoolVar(&f.LogVerbose, "logverbose", false,
 		"Set this flag to true if you would like to see verbose logging.")
@@ -61,6 +67,45 @@ func initializeFlags() *EnvironmentFlags {
 // ImagePath is a helper function to prefix image name with repo and suffix with tag
 func ImagePath(name string) string {
 	return fmt.Sprintf("%s/%s:%s", Flags.DockerRepo, name, Flags.Tag)
+}
+
+// ClusterName gets cluster name either from flag or from kubeconfig
+func ClusterName() string {
+	clusterName := Flags.Cluster
+	if "" == clusterName {
+		output, err := exec.Command("kubectl", "config", "current-context").CombinedOutput()
+		if err != nil {
+			log.Fatal("error getting cluster name from kubectl")
+		}
+		c := strings.TrimRight(string(output), " \n\r")
+		lastUnderscoreIndex := strings.LastIndex(c, "_")
+		if -1 == lastUnderscoreIndex {
+			log.Fatalf("there should be at least 1 underscore in kubectl context '%s'", output)
+		}
+		clusterName = c[lastUnderscoreIndex+1:]
+	}
+	return clusterName
+}
+
+// GetClusterRegion gets cluster region from flag, or derive from cluster
+func GetClusterRegion() string {
+	clusterRegion := Flags.ClusterRegion
+	if "" == clusterRegion {
+		output, err := exec.Command("gcloud", "container", "clusters", "list", "--format='value(NAME,LOCATION)'").CombinedOutput()
+		if err != nil {
+			log.Fatal("error getting cluster region from gcloud")
+		}
+		if "" != output {
+			for _, line := range strings.Split(output, "\r\n") {
+				parts := strings.Split(line, " ")
+				if len(parts) > 1 && parts[0] == ClusterName() {
+					clusterRegion = parts[1]
+					break
+				}
+			}
+		}
+	}
+	return clusterRegion
 }
 
 // GetWhitelistedLanguages is a helper function to return a map of whitelisted languages based on Languages filter
